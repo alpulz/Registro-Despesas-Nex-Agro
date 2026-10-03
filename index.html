@@ -139,20 +139,6 @@
     position: absolute; top: 20px; right: 20px; background: none; border: none; color: #fff;
     font-size: 28px; cursor: pointer;
   }
-  .itens-table {
-    width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 4px;
-    border: 1px solid var(--line); border-radius: 7px; overflow: hidden;
-  }
-  .itens-table th {
-    text-align: left; background: var(--panel-2); color: var(--muted);
-    font-weight: 600; text-transform: uppercase; letter-spacing: .04em; font-size: 10.5px;
-    padding: 7px 8px; border-bottom: 1px solid var(--line);
-  }
-  .itens-table td {
-    padding: 6px 8px; border-bottom: 1px solid var(--line); color: var(--ink);
-  }
-  .itens-table tr:last-child td { border-bottom: none; }
-  .itens-table td.valor { text-align: right; white-space: nowrap; color: var(--accent); font-weight: 600; }
   .cnpj-tag {
     display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px;
     padding: 7px 10px; border-radius: 7px; border: 1px solid;
@@ -198,10 +184,6 @@
     <div class="field">
       <label class="field-label">Despesa</label>
       <input type="text" placeholder="Ex: Combustível, Adubo, Frete..." id="fDespesa" />
-    </div>
-    <div class="field" id="itensField" style="display:none;">
-      <label class="field-label">Itens identificados no comprovante (leitura automática)</label>
-      <div id="itensTable"></div>
     </div>
     <div class="field" id="cnpjField" style="display:none;"></div>
     <div class="field">
@@ -299,7 +281,6 @@
     const ocrStatusEl = document.getElementById("ocrStatus");
     ocrStatusEl.style.display = "none";
     ocrStatusEl.textContent = "";
-    renderItensTable([]);
     renderCnpjTag(null);
   }
 
@@ -411,49 +392,6 @@
       : `<span class="cnpj-tag nomatch">ℹ️ CNPJ da Nex Agro não identificado neste comprovante</span>`;
   }
 
-  // Tenta separar as linhas de item (descrição + valor) de um cupom/nota
-  // fiscal, ignorando cabeçalho, rodapé e linhas de totais/pagamento.
-  const LINHA_IGNORAR = /\b(total|subtotal|troco|desconto|acrescimo|dinheiro|cart[aã]o|cnpj|cpf|cupom|cfe|coo|data|hora|endere[cç]o|valor pago|forma de pagamento|qtd\.? total|itens|tribut|icms|via consumidor|obrigado|volte sempre)\b/i;
-
-  function parseItensFromText(text) {
-    const linhas = text.split("\n").map((l) => l.trim()).filter(Boolean);
-    const itens = [];
-    for (const linha of linhas) {
-      const m = linha.match(/^(.{3,}?)\s+(\d{1,3}(?:\.\d{3})*,\d{2})\s*$/);
-      if (!m) continue;
-      const [, descricaoRaw, valorStr] = m;
-      if (LINHA_IGNORAR.test(descricaoRaw)) continue;
-      if (/^[\d\s\/\-.,:R$xX]+$/.test(descricaoRaw)) continue; // só números/símbolos, não é descrição
-      if (!pareceTextoValido(descricaoRaw)) continue;
-      const valor = parseFloat(valorStr.replace(/\./g, "").replace(",", "."));
-      if (!valor) continue;
-      itens.push({ descricao: descricaoRaw.replace(/\s{2,}/g, " ").trim().slice(0, 50), valor });
-    }
-    // Remove a última linha se ela for provavelmente o total (maior valor e única)
-    if (itens.length > 1) {
-      const maxValor = Math.max(...itens.map((i) => i.valor));
-      const comMax = itens.filter((i) => i.valor === maxValor);
-      if (comMax.length === 1 && itens[itens.length - 1].valor === maxValor) {
-        itens.pop();
-      }
-    }
-    return itens.slice(0, 20);
-  }
-
-  function renderItensTable(itens) {
-    const field = document.getElementById("itensField");
-    const container = document.getElementById("itensTable");
-    if (!itens || itens.length === 0) { field.style.display = "none"; container.innerHTML = ""; return; }
-    field.style.display = "block";
-    const linhas = itens.map((i) =>
-      `<tr><td>${escapeHtml(i.descricao)}</td><td class="valor">${formatBRL(i.valor)}</td></tr>`
-    ).join("");
-    container.innerHTML = `<table class="itens-table">
-      <thead><tr><th>Descrição</th><th style="text-align:right;">Valor</th></tr></thead>
-      <tbody>${linhas}</tbody>
-    </table>`;
-  }
-
   async function lerComprovantePorOCR(dataUrl) {
     const statusEl = document.getElementById("ocrStatus");
     if (typeof Tesseract === "undefined") return; // OCR indisponível (ex: sem internet) — segue sem travar o app
@@ -476,10 +414,6 @@
 
       const cnpjEncontrado = encontrarCNPJNexAgro(text);
       renderCnpjTag(cnpjEncontrado);
-
-      const itens = parseItensFromText(text);
-      renderItensTable(itens);
-      if (itens.length > 0) achouAlgo = true;
 
       statusEl.style.display = "none";
       if (achouAlgo) {
