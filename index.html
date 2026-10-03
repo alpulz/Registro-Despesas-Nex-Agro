@@ -185,8 +185,12 @@
     </div>
     <div class="field">
       <label class="field-label">Comprovante</label>
-      <input type="file" accept="image/*" id="fPhoto" style="position:absolute; width:1px; height:1px; opacity:0; overflow:hidden; clip:rect(0,0,0,0);" />
-      <label class="photo-btn" id="photoBtn" for="fPhoto">📷 Tirar / anexar foto</label>
+      <input type="file" accept="image/*" capture="environment" id="fPhotoCamera" style="position:absolute; width:1px; height:1px; opacity:0; overflow:hidden; clip:rect(0,0,0,0);" />
+      <input type="file" accept="image/*" id="fPhotoGaleria" style="position:absolute; width:1px; height:1px; opacity:0; overflow:hidden; clip:rect(0,0,0,0);" />
+      <div style="display:flex; gap:8px;">
+        <label class="photo-btn" id="photoBtnCamera" for="fPhotoCamera" style="flex:1;">📷 Tirar foto</label>
+        <label class="photo-btn" id="photoBtnGaleria" for="fPhotoGaleria" style="flex:1;">🖼️ Galeria/Arquivos</label>
+      </div>
       <img id="photoPreview" />
       <div id="ocrStatus" style="display:none; margin-top:8px; font-size:13px; color: var(--muted);"></div>
     </div>
@@ -261,11 +265,12 @@
     document.getElementById("fDespesa").value = "";
     document.getElementById("fObs").value = "";
     document.getElementById("fValor").value = "";
-    document.getElementById("fPhoto").value = "";
+    document.getElementById("fPhotoCamera").value = "";
+    document.getElementById("fPhotoGaleria").value = "";
     pendingPhoto = null;
     document.getElementById("photoPreview").style.display = "none";
-    document.getElementById("photoBtn").textContent = "📷 Tirar / anexar foto";
-    document.getElementById("photoBtn").classList.remove("filled");
+    document.getElementById("photoBtnCamera").classList.remove("filled");
+    document.getElementById("photoBtnGaleria").classList.remove("filled");
     const ocrStatusEl = document.getElementById("ocrStatus");
     ocrStatusEl.style.display = "none";
     ocrStatusEl.textContent = "";
@@ -273,8 +278,7 @@
 
   // O rótulo (label) aponta para o input via "for", então o navegador abre o
   // seletor de arquivo nativamente, sem depender de JavaScript disparar o clique.
-  document.getElementById("fPhoto").addEventListener("change", (e) => {
-    const file = e.target.files && e.target.files[0];
+  function handlePhotoFile(file) {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
@@ -282,12 +286,18 @@
       const img = document.getElementById("photoPreview");
       img.src = pendingPhoto;
       img.style.display = "block";
-      document.getElementById("photoBtn").textContent = "📷 Foto anexada — trocar";
-      document.getElementById("photoBtn").classList.add("filled");
+      document.getElementById("photoBtnCamera").classList.add("filled");
+      document.getElementById("photoBtnGaleria").classList.add("filled");
       lerComprovantePorOCR(pendingPhoto);
     };
     reader.onerror = () => showBanner("err", "Não foi possível ler a imagem.");
     reader.readAsDataURL(file);
+  }
+  document.getElementById("fPhotoCamera").addEventListener("change", (e) => {
+    handlePhotoFile(e.target.files && e.target.files[0]);
+  });
+  document.getElementById("fPhotoGaleria").addEventListener("change", (e) => {
+    handlePhotoFile(e.target.files && e.target.files[0]);
   });
 
   // --- Leitura automática do comprovante (OCR) ---
@@ -327,12 +337,25 @@
     return `${yyyy}-${mm}-${dd}`;
   }
 
+  function pareceTextoValido(linha) {
+    // Filtro de qualidade: descarta linhas que parecem "lixo" de OCR
+    // (muitas palavras soltas de 1 letra, sinal de leitura ruim)
+    const palavras = linha.split(/\s+/).filter(Boolean);
+    if (palavras.length === 0) return false;
+    const palavrasCurtas = palavras.filter((p) => p.replace(/[^A-Za-zÀ-ÿ0-9]/g, "").length <= 1).length;
+    if (palavrasCurtas / palavras.length > 0.3) return false;
+    // Precisa ter pelo menos uma palavra "de verdade" (3+ letras)
+    const temPalavraDeVerdade = palavras.some((p) => p.replace(/[^A-Za-zÀ-ÿ]/g, "").length >= 3);
+    return temPalavraDeVerdade;
+  }
+
   function parseEstabelecimentoFromText(text) {
     const linhas = text.split("\n").map((l) => l.trim()).filter(Boolean);
     for (const linha of linhas.slice(0, 6)) {
       // Pula linhas que são só números, datas ou símbolos
       if (/^[\d\s\/\-.,:R$]+$/.test(linha)) continue;
       if (linha.length < 3) continue;
+      if (!pareceTextoValido(linha)) continue;
       return linha.slice(0, 60);
     }
     return null;
