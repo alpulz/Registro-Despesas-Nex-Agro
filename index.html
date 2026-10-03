@@ -383,13 +383,8 @@
       const fData = document.getElementById("fData");
       if (data) { fData.value = data; achouAlgo = true; }
 
-      const estabelecimento = parseEstabelecimentoFromText(text);
-      const fDespesa = document.getElementById("fDespesa");
-      if (estabelecimento && !fDespesa.value) { fDespesa.value = estabelecimento; achouAlgo = true; }
-
-      const cupom = parseCupomFromText(text);
-      const fObs = document.getElementById("fObs");
-      if (cupom && !fObs.value) { fObs.value = cupom; achouAlgo = true; }
+      // Despesa e Observação não são preenchidas automaticamente — a leitura
+      // do nome do estabelecimento/cupom saía errada com frequência.
 
       statusEl.style.display = "none";
       if (achouAlgo) {
