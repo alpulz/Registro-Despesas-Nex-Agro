@@ -17,6 +17,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <style>
   :root {
     --bg: #0A0A0A;
@@ -187,6 +188,7 @@
       <input type="file" accept="image/*" capture="environment" id="fPhoto" style="position:absolute; width:1px; height:1px; opacity:0; overflow:hidden; clip:rect(0,0,0,0);" />
       <label class="photo-btn" id="photoBtn" for="fPhoto">📷 Tirar / anexar foto</label>
       <img id="photoPreview" />
+      <div id="ocrStatus" style="display:none; margin-top:8px; font-size:13px; color: var(--muted);"></div>
     </div>
     <button type="button" class="submit-btn" id="submitBtn">Registrar despesa</button>
   </div>
@@ -264,6 +266,9 @@
     document.getElementById("photoPreview").style.display = "none";
     document.getElementById("photoBtn").textContent = "📷 Tirar / anexar foto";
     document.getElementById("photoBtn").classList.remove("filled");
+    const ocrStatusEl = document.getElementById("ocrStatus");
+    ocrStatusEl.style.display = "none";
+    ocrStatusEl.textContent = "";
   }
 
   // O rótulo (label) aponta para o input via "for", então o navegador abre o
@@ -279,10 +284,101 @@
       img.style.display = "block";
       document.getElementById("photoBtn").textContent = "📷 Foto anexada — trocar";
       document.getElementById("photoBtn").classList.add("filled");
+      lerComprovantePorOCR(pendingPhoto);
     };
     reader.onerror = () => showBanner("err", "Não foi possível ler a imagem.");
     reader.readAsDataURL(file);
   });
+
+  // --- Leitura automática do comprovante (OCR) ---
+  // Lê o texto da foto para tentar preencher Data, Valor e Despesa.
+  // O usuário sempre confere e pode editar antes de salvar.
+  function parseValorFromText(text) {
+    // Captura números no formato 1.234,56 ou 123,45 — padrão de valores em reais
+    const matches = [...text.matchAll(/(\d{1,3}(?:\.\d{3})*,\d{2})/g)].map((m) => m[1]);
+    if (matches.length === 0) return null;
+    // Prioriza um valor que apareça perto da palavra "total"
+    const lowerText = text.toLowerCase();
+    let best = null;
+    for (const m of matches) {
+      const idx = lowerText.indexOf(m.toLowerCase());
+      const windowStart = Math.max(0, idx - 25);
+      const contexto = lowerText.slice(windowStart, idx);
+      if (contexto.includes("total")) { best = m; break; }
+    }
+    // Sem pista de "total": usa o maior valor encontrado (geralmente é o total da compra)
+    if (!best) {
+      best = matches.reduce((a, b) => {
+        const na = parseFloat(a.replace(/\./g, "").replace(",", "."));
+        const nb = parseFloat(b.replace(/\./g, "").replace(",", "."));
+        return nb > na ? b : a;
+      });
+    }
+    return parseFloat(best.replace(/\./g, "").replace(",", "."));
+  }
+
+  function parseDataFromText(text) {
+    const m = text.match(/(\d{2})[\/\-.](\d{2})[\/\-.](\d{4})/);
+    if (!m) return null;
+    const [, dd, mm, yyyy] = m;
+    const mesNum = parseInt(mm, 10);
+    const diaNum = parseInt(dd, 10);
+    if (mesNum < 1 || mesNum > 12 || diaNum < 1 || diaNum > 31) return null;
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  function parseEstabelecimentoFromText(text) {
+    const linhas = text.split("\n").map((l) => l.trim()).filter(Boolean);
+    for (const linha of linhas.slice(0, 6)) {
+      // Pula linhas que são só números, datas ou símbolos
+      if (/^[\d\s\/\-.,:R$]+$/.test(linha)) continue;
+      if (linha.length < 3) continue;
+      return linha.slice(0, 60);
+    }
+    return null;
+  }
+
+  function parseCupomFromText(text) {
+    const m = text.match(/(cupom[^\d]{0,15}\d{3,}|cfe[^\d]{0,15}\d{3,}|coo[^\d]{0,15}\d{3,})/i);
+    return m ? m[1].replace(/\s+/g, " ").trim() : null;
+  }
+
+  async function lerComprovantePorOCR(dataUrl) {
+    const statusEl = document.getElementById("ocrStatus");
+    if (typeof Tesseract === "undefined") return; // OCR indisponível (ex: sem internet) — segue sem travar o app
+    statusEl.style.display = "block";
+    statusEl.textContent = "🔎 Lendo comprovante...";
+    try {
+      const { data: { text } } = await Tesseract.recognize(dataUrl, "por");
+      let achouAlgo = false;
+
+      const valor = parseValorFromText(text);
+      const fValor = document.getElementById("fValor");
+      if (valor && !fValor.value) { fValor.value = valor.toFixed(2); achouAlgo = true; }
+
+      const data = parseDataFromText(text);
+      const fData = document.getElementById("fData");
+      if (data) { fData.value = data; achouAlgo = true; }
+
+      const estabelecimento = parseEstabelecimentoFromText(text);
+      const fDespesa = document.getElementById("fDespesa");
+      if (estabelecimento && !fDespesa.value) { fDespesa.value = estabelecimento; achouAlgo = true; }
+
+      const cupom = parseCupomFromText(text);
+      const fObs = document.getElementById("fObs");
+      if (cupom && !fObs.value) { fObs.value = cupom; achouAlgo = true; }
+
+      statusEl.style.display = "none";
+      if (achouAlgo) {
+        showBanner("ok", "Comprovante lido! Confira os dados antes de registrar.");
+      } else {
+        showBanner("err", "Não consegui identificar os dados automaticamente — preencha manualmente.");
+      }
+    } catch (e) {
+      statusEl.style.display = "none";
+      // Falha na leitura não deve travar o fluxo — o usuário preenche na mão
+    }
+  }
 
   document.getElementById("backupBtn").addEventListener("click", () => {
     if (records.length === 0) {
