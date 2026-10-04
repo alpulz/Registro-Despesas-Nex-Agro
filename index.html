@@ -392,13 +392,85 @@
       : `<span class="cnpj-tag nomatch">ℹ️ CNPJ da Nex Agro não identificado neste comprovante</span>`;
   }
 
+  // Trata a foto antes de mandar pro OCR: aumenta a resolução, converte para
+  // escala de cinza e binariza (preto e branco) usando o método de Otsu, que
+  // acha automaticamente o melhor ponto de corte entre texto e fundo. Isso
+  // ajuda muito em fotos com sombra, pouca luz ou papel amassado/desbotado.
+  async function preprocessarImagemParaOCR(dataUrl) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const maxDim = 1800;
+          const maiorLado = Math.max(img.width, img.height);
+          // Amplia imagens pequenas (texto fica maior e mais fácil de ler) e
+          // limita imagens muito grandes (processamento não fica lento demais).
+          let escala = maxDim / maiorLado;
+          if (escala > 2.5) escala = 2.5;
+          if (escala < 1) escala = Math.max(escala, 0.9);
+          const w = Math.round(img.width * escala);
+          const h = Math.round(img.height * escala);
+
+          const canvas = document.createElement("canvas");
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, w, h);
+
+          const imageData = ctx.getImageData(0, 0, w, h);
+          const px = imageData.data;
+          const n = w * h;
+          const gray = new Uint8ClampedArray(n);
+          for (let i = 0; i < n; i++) {
+            gray[i] = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
+          }
+
+          // Método de Otsu: acha automaticamente o melhor limiar para separar
+          // texto (escuro) do fundo (claro), em vez de usar um valor fixo que
+          // funcionaria bem numa foto e mal em outra.
+          const hist = new Array(256).fill(0);
+          for (let i = 0; i < n; i++) hist[gray[i]]++;
+          let somaTotal = 0;
+          for (let t = 0; t < 256; t++) somaTotal += t * hist[t];
+          let somaFundo = 0, pesoFundo = 0, melhorVar = 0, limiar = 127;
+          for (let t = 0; t < 256; t++) {
+            pesoFundo += hist[t];
+            if (pesoFundo === 0) continue;
+            const pesoTexto = n - pesoFundo;
+            if (pesoTexto === 0) break;
+            somaFundo += t * hist[t];
+            const mediaFundo = somaFundo / pesoFundo;
+            const mediaTexto = (somaTotal - somaFundo) / pesoTexto;
+            const variancia = pesoFundo * pesoTexto * (mediaFundo - mediaTexto) * (mediaFundo - mediaTexto);
+            if (variancia > melhorVar) { melhorVar = variancia; limiar = t; }
+          }
+
+          for (let i = 0; i < n; i++) {
+            const v = gray[i] > limiar ? 255 : 0;
+            px[i * 4] = v;
+            px[i * 4 + 1] = v;
+            px[i * 4 + 2] = v;
+          }
+          ctx.putImageData(imageData, 0, 0);
+          resolve(canvas.toDataURL("image/png"));
+        } catch (e) {
+          resolve(dataUrl); // Se o tratamento falhar, segue com a imagem original
+        }
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    });
+  }
+
   async function lerComprovantePorOCR(dataUrl) {
     const statusEl = document.getElementById("ocrStatus");
     if (typeof Tesseract === "undefined") return; // OCR indisponível (ex: sem internet) — segue sem travar o app
     statusEl.style.display = "block";
-    statusEl.textContent = "🔎 Lendo comprovante...";
+    statusEl.textContent = "🔎 Tratando imagem...";
     try {
-      const { data: { text } } = await Tesseract.recognize(dataUrl, "por");
+      const imagemTratada = await preprocessarImagemParaOCR(dataUrl);
+      statusEl.textContent = "🔎 Lendo comprovante...";
+      const { data: { text } } = await Tesseract.recognize(imagemTratada, "por");
       let achouAlgo = false;
 
       const valor = parseValorFromText(text);
